@@ -67,6 +67,26 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
+/**
+ * @swagger
+ * /stats:
+ *   get:
+ *     summary: Task statistics
+ *     responses:
+ *       200:
+ *         description: Count of total, done and pending tasks
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                 done:
+ *                   type: integer
+ *                 pending:
+ *                   type: integer
+ */
 app.get("/stats", (req, res) => {
   const total = todos.length;
   const done = todos.filter((task) => task.done).length;
@@ -77,6 +97,18 @@ app.get("/stats", (req, res) => {
  * /tasks:
  *   get:
  *     summary: Get all tasks
+ *     parameters:
+ *       - in: query
+ *         name: done
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *         description: Filter tasks by completion status
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search tasks by title
  *     responses:
  *       200:
  *         description: List of tasks
