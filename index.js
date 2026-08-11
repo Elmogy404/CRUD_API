@@ -2,6 +2,7 @@ const express = require("express");
 const app = express();
 const swaggerJsdoc = require("swagger-jsdoc");
 const swaggerUi = require("swagger-ui-express");
+//
 const options = {
   definition: {
     openapi: "3.0.0",
@@ -32,7 +33,7 @@ let todos = [
 let nextidx = 4;
 const specs = swaggerJsdoc(options);
 
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
+app.use("/docs", swaggerUi.serve, swaggerUi.setup(specs));
 
 app.use(express.json());
 app.listen(3000, () => {
@@ -66,6 +67,11 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
+app.get("/stats", (req, res) => {
+  const total = todos.length;
+  const done = todos.filter((task) => task.done).length;
+  res.json({ total, done, pending: total - done });
+});
 /**
  * @swagger
  * /tasks:
@@ -82,7 +88,17 @@ app.get("/health", (req, res) => {
  *                 $ref: '#/components/schemas/Task'
  */
 app.get("/tasks", (req, res) => {
-  res.json(todos);
+  let result = todos;
+  if (req.query.done !== undefined) {
+    const done = req.query.done === "true";
+    result = result.filter((task) => task.done === done);
+  }
+  if (req.query.search) {
+    result = result.filter((task) =>
+      task.title.toLowerCase().includes(req.query.search.toLowerCase()),
+    );
+  }
+  res.status(200).json(result);
 });
 /**
  * @swagger
@@ -149,15 +165,13 @@ app.post("/tasks", (req, res) => {
  */
 app.get("/tasks/:id", (req, res) => {
   const id = Number(req.params.id);
-  if (id >= nextidx || id <= 0) {
-    return res.status(404).json({ error: "Task " + id + " not found" });
-  } else if (!todos[id - 1]) {
+  const task = todos.find((task) => task.id === id);
+  if (!task) {
     return res.status(404).json({ error: `Task ${id} not found` });
   } else {
-    return res.status(200).json(todos[id - 1]);
+    return res.status(200).json(task);
   }
 });
-
 /**
  * @swagger
  * /tasks/{id}:
@@ -194,20 +208,36 @@ app.get("/tasks/:id", (req, res) => {
  */
 app.put("/tasks/:id", (req, res) => {
   const id = Number(req.params.id);
-  const { title, done } = req.body;
-  if (id >= nextidx || id <= 0) {
+  const task = todos.find((task) => task.id === id);
+  if (!task) {
     return res.status(404).json({ error: "Task " + id + " not found" });
   }
-  if (
-    typeof title !== "string" ||
-    title.trim() === "" ||
-    typeof done !== "boolean"
-  ) {
-    return res.status(400).json({ error: "Invalid request body" });
+  const { title, done } = req.body;
+  if (title === undefined && done === undefined) {
+    return res.status(400).json({
+      error: "At least title or done is required",
+    });
   }
-  todos[id - 1].title = title;
-  todos[id - 1].done = done;
-  return res.status(200).json(todos[id - 1]);
+  if (
+    title !== undefined &&
+    (typeof title !== "string" || title.trim() === "")
+  ) {
+    return res.status(400).json({
+      error: "Invalid title",
+    });
+  }
+  if (done !== undefined && typeof done !== "boolean") {
+    return res.status(400).json({
+      error: "Invalid done value",
+    });
+  }
+  if (title !== undefined) {
+    task.title = title;
+  }
+  if (done !== undefined) {
+    task.done = done;
+  }
+  res.status(200).json(task);
 });
 
 /**
@@ -229,14 +259,10 @@ app.put("/tasks/:id", (req, res) => {
  */
 app.delete("/tasks/:id", (req, res) => {
   const id = Number(req.params.id);
-  if (id <= 0 || id >= nextidx) {
+  const task = todos.find((task) => task.id === id);
+  if (!task) {
     return res.status(404).json({ error: `Task ${id} not found` });
   }
-  todos.splice(id - 1, 1);
-
-  todos.forEach((task, index) => {
-    task.id = index + 1;
-  });
-  nextidx = todos.length + 1;
-  return res.sendStatus(204);
+  todos.splice(todos.indexOf(task), 1);
+  res.sendStatus(204);
 });
