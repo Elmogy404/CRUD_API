@@ -53,6 +53,8 @@ const options = {
             id: { type: "integer" },
             title: { type: "string" },
             done: { type: "boolean" },
+            created_at: { type: "string", format: "date-time" },
+            updated_at: { type: "string", format: "date-time" },
           },
         },
       },
@@ -124,9 +126,9 @@ FROM tasks;`);
 });
 /**
  * @swagger
- * /tasks:
+*  /tasks:
  *   get:
- *     summary: Get all tasks
+ *     summary: Get all tasks sorted by title
  *     parameters:
  *       - in: query
  *         name: done
