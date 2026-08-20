@@ -2,7 +2,42 @@ const express = require("express");
 const app = express();
 const swaggerJsdoc = require("swagger-jsdoc");
 const swaggerUi = require("swagger-ui-express");
-//
+require("dotenv").config();
+const { Pool } = require("pg");
+const pool = new Pool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT),
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+});
+async function initDB() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS tasks (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  done boolean NOT NULL DEFAULT false,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+  const result = await pool.query("SELECT COUNT(*) FROM tasks");
+  if (Number(result.rows[0].count) === 0) {
+    await pool.query(`INSERT INTO tasks (title,done)
+      VALUES
+          ('Learn Express', false),
+          ('Build a CRUD API', true),
+          ('Submit assignment', false)`);
+  }
+}
+app.use(express.json());
+
+initDB()
+  .then(() => {
+    app.listen(3000, () => {
+      console.log("Server is running on http://localhost:3000");
+    });
+  })
+  .catch((err) => {
+    console.error("Failed to initialize database:", err);
+  });
 const options = {
   definition: {
     openapi: "3.0.0",
@@ -25,20 +60,8 @@ const options = {
   },
   apis: ["./index.js"],
 };
-let todos = [
-  { id: 1, title: "Learn Express", done: false },
-  { id: 2, title: "Build a CRUD API", done: true },
-  { id: 3, title: "Submit assignment", done: false },
-];
-let nextidx = 4;
 const specs = swaggerJsdoc(options);
-
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(specs));
-
-app.use(express.json());
-app.listen(3000, () => {
-  console.log("Server is running on http://localhost:3000");
-});
 /**
  * @swagger
  * /:
@@ -87,10 +110,17 @@ app.get("/health", (req, res) => {
  *                 pending:
  *                   type: integer
  */
-app.get("/stats", (req, res) => {
-  const total = todos.length;
-  const done = todos.filter((task) => task.done).length;
-  res.json({ total, done, pending: total - done });
+app.get("/stats", async (req, res) => {
+  const result = await pool.query(`SELECT
+    COUNT(*) AS total,
+    COUNT(*) FILTER (WHERE done = true) AS done,
+    COUNT(*) FILTER (WHERE done = false) AS pending
+FROM tasks;`);
+  res.json({
+    total: Number(result.rows[0].total),
+    done: Number(result.rows[0].done),
+    pending: Number(result.rows[0].pending),
+  });
 });
 /**
  * @swagger
@@ -119,18 +149,26 @@ app.get("/stats", (req, res) => {
  *               items:
  *                 $ref: '#/components/schemas/Task'
  */
-app.get("/tasks", (req, res) => {
-  let result = todos;
+app.get("/tasks", async (req, res) => {
+  let query = "SELECT * FROM tasks";
+  const values = [];
+  const conditions = [];
+
   if (req.query.done !== undefined) {
-    const done = req.query.done === "true";
-    result = result.filter((task) => task.done === done);
+    conditions.push(`done = $${values.length + 1}`);
+    values.push(req.query.done === "true");
   }
   if (req.query.search) {
-    result = result.filter((task) =>
-      task.title.toLowerCase().includes(req.query.search.toLowerCase()),
-    );
+    conditions.push(`title ILIKE $${values.length + 1}`);
+    values.push(`%${req.query.search}%`);
   }
-  res.status(200).json(result);
+
+  if (conditions.length > 0) {
+    query += " WHERE " + conditions.join(" AND ");
+  }
+  query += " ORDER BY title ASC";
+  const result = await pool.query(query, values);
+  res.status(200).json(result.rows);
 });
 /**
  * @swagger
@@ -158,20 +196,19 @@ app.get("/tasks", (req, res) => {
  *       400:
  *         description: Title is required
  */
-app.post("/tasks", (req, res) => {
-  const { title } = req.body;
+app.post("/tasks", async (req, res) => {
+  const { title } = req.body || {};
   if (typeof title !== "string" || title.trim() === "") {
     return res.status(400).json({
       error: "Title is required",
     });
   }
-  const newTask = {
-    id: nextidx++,
-    title,
-    done: false,
-  };
-  todos.push(newTask);
-  res.status(201).json(newTask);
+  const result = await pool.query(
+    `INSERT INTO tasks (title,done)
+    VALUES ($1, false) RETURNING *`,
+    [title],
+  );
+  res.status(201).json(result.rows[0]);
 });
 /**
  * @swagger
@@ -195,13 +232,13 @@ app.post("/tasks", (req, res) => {
  *              $ref: '#/components/schemas/Task'
  *
  */
-app.get("/tasks/:id", (req, res) => {
+app.get("/tasks/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const task = todos.find((task) => task.id === id);
-  if (!task) {
+  const result = await pool.query("SELECT * FROM tasks WHERE id = $1", [id]);
+  if (result.rows.length === 0) {
     return res.status(404).json({ error: `Task ${id} not found` });
   } else {
-    return res.status(200).json(task);
+    return res.status(200).json(result.rows[0]);
   }
 });
 /**
@@ -238,13 +275,9 @@ app.get("/tasks/:id", (req, res) => {
  *              schema:
  *                $ref: '#/components/schemas/Task'
  */
-app.put("/tasks/:id", (req, res) => {
+app.put("/tasks/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const task = todos.find((task) => task.id === id);
-  if (!task) {
-    return res.status(404).json({ error: "Task " + id + " not found" });
-  }
-  const { title, done } = req.body;
+  const { title, done } = req.body || {};
   if (title === undefined && done === undefined) {
     return res.status(400).json({
       error: "At least title or done is required",
@@ -263,13 +296,20 @@ app.put("/tasks/:id", (req, res) => {
       error: "Invalid done value",
     });
   }
-  if (title !== undefined) {
-    task.title = title;
+  const result = await pool.query(
+    `UPDATE tasks
+    SET 
+      title = COALESCE($1, title),
+      done = COALESCE($2, done),
+      updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      RETURNING *`,
+    [title ?? null, done ?? null, id],
+  );
+  if (result.rows.length === 0) {
+    return res.status(404).json({ error: "Task " + id + " not found" });
   }
-  if (done !== undefined) {
-    task.done = done;
-  }
-  res.status(200).json(task);
+  res.status(200).json(result.rows[0]);
 });
 
 /**
@@ -289,12 +329,14 @@ app.put("/tasks/:id", (req, res) => {
  *      204:
  *        description: DELETED!!
  */
-app.delete("/tasks/:id", (req, res) => {
+app.delete("/tasks/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const task = todos.find((task) => task.id === id);
-  if (!task) {
+  const result = await pool.query(
+    "DELETE FROM tasks WHERE id = $1 RETURNING *",
+    [id],
+  );
+  if (result.rows.length === 0) {
     return res.status(404).json({ error: `Task ${id} not found` });
   }
-  todos.splice(todos.indexOf(task), 1);
   res.sendStatus(204);
 });
